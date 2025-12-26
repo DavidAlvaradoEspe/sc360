@@ -1,13 +1,12 @@
 /**
- * Audio Engine for Spatial Audio MVP
- * Phase 3: FOA encoding → Binaural decoding
+ * Audio Engine for SC360 Spatial Audio
  * 
  * Signal flow:
  * Source → GainNode → FOA Encoder (4ch) → FOA Bus → Binaural Decoder → Stereo Output
  */
 
-import { AUDIO_ASSETS, NUM_OBJECTS, degToRad } from './constants';
-import { loadSOFAHRIRs } from './hrtf/sofaLoader';
+import {AUDIO_ASSETS, degToRad, NUM_OBJECTS} from './constants';
+import {loadSOFAHRIRs} from './hrtf/sofaLoader';
 
 export interface ObjectPosition {
     x: number; // Normalized 0-1
@@ -121,15 +120,11 @@ export class AudioEngine {
         }
 
         try {
-            // Register FOA encoder
-            await this.audioContext.audioWorklet.addModule(
-                new URL('./worklets/foa-encoder.worklet.ts', import.meta.url).href
-            );
+            // Register FOA encoder (from public folder)
+            await this.audioContext.audioWorklet.addModule('/worklets/foa-encoder.worklet.js');
 
-            // Register binaural decoder
-            await this.audioContext.audioWorklet.addModule(
-                new URL('./worklets/foa-binaural-decoder.worklet.ts', import.meta.url).href
-            );
+            // Register binaural decoder (from public folder)
+            await this.audioContext.audioWorklet.addModule('/worklets/foa-binaural-decoder.worklet.js');
 
             this.workletReady = true;
         } catch (error) {
@@ -153,8 +148,7 @@ export class AudioEngine {
                 throw new Error(`Failed to load ${asset.path}: ${response.statusText}`);
             }
             const arrayBuffer = await response.arrayBuffer();
-            const audioBuffer = await this.audioContext!.decodeAudioData(arrayBuffer);
-            return audioBuffer;
+            return await this.audioContext!.decodeAudioData(arrayBuffer);
         });
 
         this.audioBuffers = await Promise.all(loadPromises);
