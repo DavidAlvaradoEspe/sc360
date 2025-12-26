@@ -16,7 +16,7 @@ export const GRID_WIDTH = 600;
 export const GRID_HEIGHT = 300;
 
 // Spatial mapping ranges
-export const AZIMUTH_RANGE = { min: -180, max: 180 }; // degrees, X axis
+export const AZIMUTH_RANGE = { min: -90, max: 90 }; // degrees, X axis (full L/R separation)
 export const ELEVATION_RANGE = { min: -45, max: 45 }; // degrees, Y axis
 
 // Default object positions (normalized 0-1)
