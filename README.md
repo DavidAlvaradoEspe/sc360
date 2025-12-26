@@ -1,16 +1,100 @@
-# React + Vite
+# SC360 - Spatial Audio Web Application
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A professional web-based spatial audio application featuring First Order Ambisonics (FOA) encoding and binaural decoding with real-time HRTF processing.
 
-Currently, two official plugins are available:
+## ✨ Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Interactive Spatial Grid** - Drag audio sources in real-time to position them in 3D space
+- **FOA Encoding** - First Order Ambisonics (W, Y, Z, X) signal processing
+- **Binaural Decoding** - HRTF-based stereo rendering for headphone listening
+- **Professional Mixer UI** - Channel strips with rotary knobs, mute controls, and level meters
+- **SOFA HRTF Support** - Load custom HRTF data from SOFA files
+- **Mobile-First Design** - Responsive UI optimized for all screen sizes
+- **Real-Time Metering** - FOA bus level visualization with logarithmic scaling
 
-## React Compiler
+## 🚀 Quick Start
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Prerequisites
 
-## Expanding the ESLint configuration
+- Node.js 18+ 
+- npm or yarn
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/YOUR_USERNAME/sc360.git
+cd sc360
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+
+### Build for Production
+
+```bash
+npm run build
+```
+
+## 🎧 Usage
+
+1. Click **START AUDIO** to initialize the Web Audio context
+2. Click **Play** to begin playback of the audio stems
+3. **Drag the numbered dots** on the spatial grid to move audio sources
+4. Adjust volume with the **rotary knobs** in the Channel Mixer
+5. Click **M** to mute/unmute individual channels
+6. Watch the **FOA Bus Levels** meter respond to spatial positioning
+
+## 🛠️ Tech Stack
+
+- **React 19** + TypeScript
+- **Vite** - Build tool and dev server
+- **Web Audio API** - Audio processing
+- **AudioWorklet** - Low-latency DSP processing
+- **libmysofa (WASM)** - SOFA HRTF file parsing
+
+## 📁 Project Structure
+
+```
+sc360/
+├── public/
+│   ├── audio/          # Audio stem files
+│   ├── hrtf/           # SOFA HRTF files
+│   └── wasm/           # WASM binary files
+├── src/
+│   ├── app/            # React components & styles
+│   └── audio/          # Audio engine & worklets
+├── wasm/               # WASM source & build files
+└── index.html
+```
+
+## 🎛️ Audio Architecture
+
+```
+Audio Sources → Gain Nodes → FOA Encoders → FOA Bus → Binaural Decoder → Output
+                                              ↓
+                                     Channel Analyzers
+```
+
+- **FOA Encoding**: Mono sources encoded to 4-channel Ambisonics (ACN/SN3D)
+- **Binaural Decoding**: 8-speaker virtual array with HRTF convolution
+- **HRTF Source**: SOFA file with automatic fallback to built-in HRIRs
+
+## 📱 Browser Support
+
+- Chrome 66+
+- Firefox 76+
+- Safari 14.1+
+- Edge 79+
+
+## 📄 License
+
+MIT License
+
+## 🙏 Acknowledgments
+
+- [libmysofa](https://github.com/hoene/libmysofa) - SOFA file reading library
+- HRTF data from research databases
