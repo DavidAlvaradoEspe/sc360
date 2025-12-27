@@ -56,7 +56,7 @@ export class AudioEngine {
 
     // State
     private currentOrder: number = MAX_ORDER;
-    private currentHRIRIndex: number = 2; // Default to Medium room BRIRs
+    private currentHRIRIndex: number = 0; // Default to Free Field HRIRs 1
 
     // Mixing
     private ambisonicBus: GainNode | null = null;
