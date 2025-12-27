@@ -1,19 +1,18 @@
 /**
  * Main App Component - SC360 Spatial Audio
- * Production Build
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { SpatialGrid, ObjectPosition } from './SpatialGrid';
 import { ObjectControls } from './ObjectControls';
-import { ChannelMeter } from './ChannelMeter';
+
 import {
     DEFAULT_POSITIONS,
     NUM_OBJECTS,
     xToAzimuth,
     yToElevation,
 } from '../audio/constants';
-import { getAudioEngine } from '../audio/audioEngine';
+import { getAudioEngine, HRIR_OPTIONS, MIRROR_OPTIONS } from '../audio/audioEngine';
 import './styles.css';
 
 const App: React.FC = () => {
@@ -25,29 +24,16 @@ const App: React.FC = () => {
     );
     const [gains, setGains] = useState<number[]>(Array(NUM_OBJECTS).fill(1));
     const [muted, setMuted] = useState<boolean[]>(Array(NUM_OBJECTS).fill(false));
-    const [channelLevels, setChannelLevels] = useState<number[]>([0, 0, 0, 0]);
+
+
+    // HOA Controls state
+    const [currentOrder, setCurrentOrder] = useState(3);
+    const [currentHRIR, setCurrentHRIR] = useState(0); // Default to Free Field HRIRs 1
+    const [currentMirror, setCurrentMirror] = useState(0);
 
     const audioEngine = getAudioEngine();
-    const animationFrameRef = useRef<number | undefined>(undefined);
 
-    // Animation loop for channel meters
-    useEffect(() => {
-        const updateMeters = () => {
-            if (isPlaying) {
-                const levels = audioEngine.getChannelLevels();
-                setChannelLevels(levels);
-            }
-            animationFrameRef.current = requestAnimationFrame(updateMeters);
-        };
 
-        animationFrameRef.current = requestAnimationFrame(updateMeters);
-
-        return () => {
-            if (animationFrameRef.current) {
-                cancelAnimationFrame(animationFrameRef.current);
-            }
-        };
-    }, [isPlaying, audioEngine]);
 
     // Start Audio button handler
     const handleStartAudio = useCallback(async () => {
@@ -70,7 +56,7 @@ const App: React.FC = () => {
     const handleStop = useCallback(() => {
         audioEngine.stop();
         setIsPlaying(audioEngine.playing);
-        setChannelLevels([0, 0, 0, 0]);
+
     }, [audioEngine]);
 
     // Position change handler
@@ -82,7 +68,6 @@ const App: React.FC = () => {
                 return newPositions;
             });
 
-            // Update audio engine with new position
             audioEngine.updateObjectPosition(index, {
                 x: position.x,
                 y: position.y,
@@ -115,6 +100,33 @@ const App: React.FC = () => {
                 audioEngine.setMuted(index, newMuted[index]);
                 return newMuted;
             });
+        },
+        [audioEngine]
+    );
+
+    // Order change handler
+    const handleOrderChange = useCallback(
+        (order: number) => {
+            setCurrentOrder(order);
+            audioEngine.setOrder(order);
+        },
+        [audioEngine]
+    );
+
+    // HRIR change handler
+    const handleHRIRChange = useCallback(
+        async (index: number) => {
+            setCurrentHRIR(index);
+            await audioEngine.setHRIR(index);
+        },
+        [audioEngine]
+    );
+
+    // Mirror change handler
+    const handleMirrorChange = useCallback(
+        (mode: number) => {
+            setCurrentMirror(mode);
+            audioEngine.setMirror(mode);
         },
         [audioEngine]
     );
@@ -160,30 +172,75 @@ const App: React.FC = () => {
                     </span>
                 </div>
 
-                {/* Spatial Grid + Channel Meters side by side */}
-                <div className="grid-meter-container">
+                {/* HOA Controls Row */}
+                <div className="hoa-controls">
+                    {/* Order Selector */}
+                    <div className="control-group">
+                        <span className="control-label">Order:</span>
+                        {[1, 2, 3].map((order) => (
+                            <button
+                                key={order}
+                                className={`hoa-button ${currentOrder === order ? 'active' : ''}`}
+                                onClick={() => handleOrderChange(order)}
+                                disabled={!audioReady}
+                            >
+                                N{order}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* HRIR Selector */}
+                    <div className="control-group">
+                        <span className="control-label">Decoder:</span>
+                        {HRIR_OPTIONS.map((option, index) => (
+                            <button
+                                key={index}
+                                className={`hoa-button ${currentHRIR === index ? 'active' : ''}`}
+                                onClick={() => handleHRIRChange(index)}
+                                disabled={!audioReady}
+                            >
+                                {option.name}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Mirror Selector */}
+                    <div className="control-group">
+                        <span className="control-label">Mirror:</span>
+                        {MIRROR_OPTIONS.map((option) => (
+                            <button
+                                key={option.value}
+                                className={`hoa-button ${currentMirror === option.value ? 'active' : ''}`}
+                                onClick={() => handleMirrorChange(option.value)}
+                                disabled={!audioReady}
+                            >
+                                {option.name}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Main Content: Grid + Mixer */}
+                <div className={`main-content-layout ${!audioReady ? 'locked' : ''}`}>
                     <SpatialGrid
                         positions={positions}
                         onPositionChange={handlePositionChange}
+                        disabled={!audioReady}
                     />
 
-                    <ChannelMeter
-                        levels={channelLevels}
-                        isActive={isPlaying}
+                    <ObjectControls
+                        gains={gains}
+                        muted={muted}
+                        positions={positions}
+                        onGainChange={handleGainChange}
+                        onMuteToggle={handleMuteToggle}
+                        disabled={!audioReady}
                     />
                 </div>
-
-                {/* Object Controls */}
-                <ObjectControls
-                    gains={gains}
-                    muted={muted}
-                    positions={positions}
-                    onGainChange={handleGainChange}
-                    onMuteToggle={handleMuteToggle}
-                />
             </main>
         </div>
     );
 };
 
 export default App;
+

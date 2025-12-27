@@ -1,5 +1,16 @@
 /**
  * Audio configuration constants for the Spatial Audio MVP
+ * 
+ * Spatial Coordinate System (matching reference implementation):
+ * - X axis (horizontal): Azimuth (-180° to +180°, full circle)
+ * - Y axis (vertical): Elevation (-90° to +90°, half sphere)
+ * 
+ * Grid Layout:
+ * - Left (X=0) → +180° azimuth (behind left)
+ * - Center (X=0.5) → 0° azimuth (front center)
+ * - Right (X=1) → -180° azimuth (behind right)
+ * - Top (Y=0) → +90° elevation (above)
+ * - Bottom (Y=1) → -90° elevation (below)
  */
 
 // Audio asset paths (relative to public folder)
@@ -15,9 +26,10 @@ export const NUM_OBJECTS = AUDIO_ASSETS.length;
 export const GRID_WIDTH = 600;
 export const GRID_HEIGHT = 300;
 
-// Spatial mapping ranges
-export const AZIMUTH_RANGE = { min: -90, max: 90 }; // degrees, X axis (full L/R separation)
-export const ELEVATION_RANGE = { min: -45, max: 45 }; // degrees, Y axis
+// Spatial mapping ranges (matching reference implementation)
+// X maps to full 360° rotation: LEFT (+180°) to RIGHT (-180°)
+export const AZIMUTH_RANGE = { min: -180, max: 180 }; // degrees, full circle
+export const ELEVATION_RANGE = { min: -90, max: 90 }; // degrees, half sphere
 
 // Default object positions (normalized 0-1)
 export const DEFAULT_POSITIONS = [
@@ -38,20 +50,34 @@ export const SAMPLE_RATE = 48000;
 
 /**
  * Convert normalized X position (0-1) to azimuth in degrees
+ * X=0 → +180° (left/behind), X=0.5 → 0° (center/front), X=1 → -180° (right/behind)
  */
 export function xToAzimuth(x: number): number {
   const clamped = Math.max(0, Math.min(1, x));
-  return AZIMUTH_RANGE.min + clamped * (AZIMUTH_RANGE.max - AZIMUTH_RANGE.min);
+  // Reference formula: -Math.round(360 * (mouseXPos - (width/2)) / width)
+  // Maps 0→+180, 0.5→0, 1→-180
+  return Math.round(360 * (0.5 - clamped));
 }
 
 /**
  * Convert normalized Y position (0-1) to elevation in degrees
- * Note: Y=0 is top (positive elevation), Y=1 is bottom (negative elevation)
+ * Matches reference: Y=0 → +90° (above), Y=1 → -90° (below)
  */
 export function yToElevation(y: number): number {
   const clamped = Math.max(0, Math.min(1, y));
-  // Invert Y so that top = positive elevation
-  return ELEVATION_RANGE.max - clamped * (ELEVATION_RANGE.max - ELEVATION_RANGE.min);
+  // Reference formula: Math.round(180 * ((height/2) - mouseYPos) / height)
+  // Maps 0→+90, 0.5→0, 1→-90
+  return Math.round(180 * (0.5 - clamped));
+}
+
+/**
+ * Convert normalized Y position (0-1) to front/back factor
+ * Y=0 → Front (1.0), Y=1 → Back (0.0)
+ * This is used for EQ filtering (front = bright, back = dull)
+ */
+export function yToFrontBack(y: number): number {
+  const clamped = Math.max(0, Math.min(1, y));
+  return 1.0 - clamped; // 1 = front, 0 = back
 }
 
 /**

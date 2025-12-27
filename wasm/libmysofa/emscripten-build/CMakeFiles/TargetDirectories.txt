@@ -1,3 +1,0 @@
-/src/emscripten-build/CMakeFiles/libmysofa_wasm.dir
-/src/emscripten-build/CMakeFiles/edit_cache.dir
-/src/emscripten-build/CMakeFiles/rebuild_cache.dir

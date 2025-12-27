@@ -1,37 +1,74 @@
 /**
  * Audio Engine for SC360 Spatial Audio
+ * Using JSAmbisonics npm package
+ * SC360 Spatial Audio Engine - HOA Panner Implementation
  * 
  * Signal flow:
- * Source → GainNode → FOA Encoder (4ch) → FOA Bus → Binaural Decoder → Stereo Output
+ * Source → GainNode → monoEncoder → sceneMirror → orderLimiter → binDecoder → Output
  */
 
-import {AUDIO_ASSETS, degToRad, NUM_OBJECTS} from './constants';
-import {loadSOFAHRIRs} from './hrtf/sofaLoader';
+import * as ambisonics from 'ambisonics';
+import { AUDIO_ASSETS, NUM_OBJECTS } from './constants';
 
 export interface ObjectPosition {
-    x: number; // Normalized 0-1
-    y: number; // Normalized 0-1
-    azimuth: number; // Degrees
+    x: number;
+    y: number;
+    azimuth: number;   // Degrees
     elevation: number; // Degrees
 }
+
+// HRIR options for binaural decoding
+export interface HRIROption {
+    name: string;
+    order: number;
+    url: string;
+}
+
+export const HRIR_OPTIONS: HRIROption[] = [
+    { name: 'Free-field HRIRs 1', order: 3, url: '/audio/hrir/HOA3_IRC_1008_virtual.wav' },
+    { name: 'Free-field HRIRs 2', order: 3, url: '/audio/hrir/aalto2016_N3.wav' },
+    { name: 'Medium room BRIRs', order: 3, url: '/audio/hrir/HOA3_BRIRs-medium.wav' },
+];
+
+// Mirror options
+export const MIRROR_OPTIONS = [
+    { value: 0, name: 'None' },
+    { value: 1, name: 'Front-Back' },
+    { value: 2, name: 'Left-Right' },
+    { value: 3, name: 'Up-Down' },
+];
+
+// Max HOA order
+const MAX_ORDER = 3;
 
 export class AudioEngine {
     private audioContext: AudioContext | null = null;
     private audioBuffers: AudioBuffer[] = [];
     private sourceNodes: AudioBufferSourceNode[] = [];
     private gainNodes: GainNode[] = [];
-    private foaEncoders: AudioWorkletNode[] = [];
-    private foaBus: GainNode | null = null;
-    private binauralDecoder: AudioWorkletNode | null = null;
-    private channelSplitter: ChannelSplitterNode | null = null;
-    private channelAnalyzers: AnalyserNode[] = [];
+
+    // JSAmbisonics components
+    private encoders: any[] = [];
+    private mirror: any = null;
+    private limiter: any = null;
+    private decoder: any = null;
+    private analyser: any = null;
+
+    // State
+    private currentOrder: number = MAX_ORDER;
+    private currentMirror: number = 0;
+    private currentHRIRIndex: number = 2; // Default to Medium room BRIRs
+
+    // Mixing
+    private ambisonicBus: GainNode | null = null;
     private masterGain: GainNode | null = null;
+
     private isPlaying = false;
     private isLoaded = false;
-    private workletReady = false;
+    private filtersLoaded = false;
 
     /**
-     * Initialize the AudioContext (must be called after user interaction)
+     * Initialize the audio engine
      */
     async init(): Promise<void> {
         if (this.audioContext) {
@@ -43,109 +80,164 @@ export class AudioEngine {
 
         this.audioContext = new AudioContext();
 
-        // Load and register worklets
-        await this.registerWorklets();
+        // Handle Firefox suspension
+        this.audioContext.onstatechange = () => {
+            if (this.audioContext?.state === 'suspended') {
+                this.audioContext.resume();
+            }
+        };
 
-        // Create FOA bus (4 channels: W, Y, Z, X)
-        this.foaBus = this.audioContext.createGain();
-        this.foaBus.channelCount = 4;
-        this.foaBus.channelCountMode = 'explicit';
-        this.foaBus.channelInterpretation = 'discrete';
+        await this.initAmbisonicChain(MAX_ORDER);
+        await this.loadHRIRFilters(HRIR_OPTIONS[this.currentHRIRIndex]);
+        await this.loadAudioAssets();
 
-        // Create channel splitter for analysis (4 → 4 separate)
-        this.channelSplitter = this.audioContext.createChannelSplitter(4);
-        this.foaBus.connect(this.channelSplitter);
+        console.log('AudioEngine initialized with JSAmbisonics (Order 3)');
+    }
 
-        // Create analyzers for each FOA channel
-        for (let i = 0; i < 4; i++) {
-            const analyzer = this.audioContext.createAnalyser();
-            analyzer.fftSize = 256;
-            analyzer.smoothingTimeConstant = 0.9;
-            this.channelSplitter.connect(analyzer, i);
-            this.channelAnalyzers.push(analyzer);
-        }
+    /**
+     * Initialize the ambisonic processing chain
+     */
+    private async initAmbisonicChain(order: number): Promise<void> {
+        if (!this.audioContext) return;
 
-        // Create binaural decoder worklet (4ch FOA → 2ch stereo)
-        this.binauralDecoder = new AudioWorkletNode(this.audioContext, 'foa-binaural-decoder', {
-            numberOfInputs: 1,
-            numberOfOutputs: 1,
-            outputChannelCount: [2], // Stereo output
-        });
+        const nCh = (order + 1) ** 2; // 16 for Order 3
 
-        // Load HRIR data from SOFA file (with automatic fallback to built-in)
-        const sofaResult = await loadSOFAHRIRs(this.audioContext.sampleRate);
+        // Clear existing nodes
+        this.encoders.forEach(e => e?.out?.disconnect());
+        this.encoders = [];
+        this.gainNodes.forEach(g => g.disconnect());
+        this.gainNodes = [];
 
-        // Send HRIR data and decode matrix to the decoder worklet
-        this.binauralDecoder.port.postMessage({
-            type: 'setHRIR',
-            hrirData: sofaResult.hrirData.buffer,
-            decodeMatrix: sofaResult.decodeMatrix.buffer,
-        }, [sofaResult.hrirData.buffer, sofaResult.decodeMatrix.buffer]);
+        // Create ambisonic bus
+        this.ambisonicBus = this.audioContext.createGain();
+        this.ambisonicBus.channelCount = nCh;
+        this.ambisonicBus.channelCountMode = 'explicit';
+        this.ambisonicBus.channelInterpretation = 'discrete';
 
-        // Create master gain
-        this.masterGain = this.audioContext.createGain();
-        this.masterGain.connect(this.audioContext.destination);
-
-        // Connect: FOA bus → Binaural Decoder → Master Gain → Destination
-        this.foaBus.connect(this.binauralDecoder);
-        this.binauralDecoder.connect(this.masterGain);
-
-        // Create gain nodes and FOA encoders for each object
+        // Create encoder per audio object
         for (let i = 0; i < NUM_OBJECTS; i++) {
-            // Input gain node
+            const encoder = new ambisonics.monoEncoder(this.audioContext, order);
+            encoder.azim = 0;
+            encoder.elev = 0;
+            encoder.updateGains();
+            this.encoders.push(encoder);
+
             const gainNode = this.audioContext.createGain();
             this.gainNodes.push(gainNode);
 
-            // FOA encoder worklet
-            const encoder = new AudioWorkletNode(this.audioContext, 'foa-encoder', {
-                numberOfInputs: 1,
-                numberOfOutputs: 1,
-                outputChannelCount: [4], // 4-channel output
-            });
-
-            gainNode.connect(encoder);
-            encoder.connect(this.foaBus);
-            this.foaEncoders.push(encoder);
+            gainNode.connect(encoder.in);
+            encoder.out.connect(this.ambisonicBus);
         }
 
-        await this.loadAudioAssets();
+        // Create scene mirror
+        this.mirror = new ambisonics.sceneMirror(this.audioContext, order);
+
+        // Create order limiter (allows reducing order dynamically)
+        this.limiter = new ambisonics.orderLimiter(this.audioContext, order, this.currentOrder);
+
+        // Create binaural decoder
+        this.decoder = new ambisonics.binDecoder(this.audioContext, order);
+
+        // Create intensity analyser
+        this.analyser = new ambisonics.intensityAnalyser(this.audioContext, order);
+
+        this.masterGain = this.audioContext.createGain();
+        this.masterGain.gain.value = 2.0;
+        this.masterGain.connect(this.audioContext.destination);
+
+        // Connect chain: Bus → Mirror → Limiter → Decoder → Output
+        //                       ↘ Analyser
+        this.ambisonicBus.connect(this.mirror.in);
+        this.mirror.out.connect(this.analyser.in);
+        this.mirror.out.connect(this.limiter.in);
+        this.limiter.out.connect(this.decoder.in);
+        this.decoder.out.connect(this.masterGain);
     }
 
     /**
-     * Register AudioWorklet modules
+     * Load HRIR filters using HOAloader
      */
-    private async registerWorklets(): Promise<void> {
-        if (!this.audioContext) {
-            throw new Error('AudioContext not initialized');
+    async loadHRIRFilters(hrirOption: HRIROption): Promise<void> {
+        if (!this.audioContext || !this.decoder) return;
+
+        // If no URL, use default cardioid filters
+        if (!hrirOption.url) {
+            this.decoder.resetFilters();
+            this.filtersLoaded = true;
+            console.log('Using default cardioid filters');
+            return;
         }
 
-        try {
-            // Register FOA encoder (from public folder)
-            await this.audioContext.audioWorklet.addModule('/worklets/foa-encoder.worklet.js');
+        return new Promise((resolve) => {
+            const loader = new ambisonics.HOAloader(
+                this.audioContext,
+                hrirOption.order,
+                hrirOption.url,
+                (buffer: AudioBuffer) => {
+                    this.decoder!.updateFilters(buffer);
+                    this.filtersLoaded = true;
+                    console.log(`HRIR loaded: ${hrirOption.name}`);
+                    resolve();
+                }
+            );
 
-            // Register binaural decoder (from public folder)
-            await this.audioContext.audioWorklet.addModule('/worklets/foa-binaural-decoder.worklet.js');
+            loader.load();
 
-            this.workletReady = true;
-        } catch (error) {
-            console.error('Failed to register worklet:', error);
-            throw error;
-        }
+            // Fallback timeout
+            setTimeout(() => {
+                if (!this.filtersLoaded) {
+                    console.log('HRIR timeout, using cardioid filters');
+                    this.filtersLoaded = true;
+                    resolve();
+                }
+            }, 5000);
+        });
     }
 
     /**
-     * Load all audio assets
+     * Change HRIR (UI control)
+     */
+    async setHRIR(hrirIndex: number): Promise<void> {
+        if (hrirIndex < 0 || hrirIndex >= HRIR_OPTIONS.length) return;
+        this.currentHRIRIndex = hrirIndex;
+        this.filtersLoaded = false;
+        await this.loadHRIRFilters(HRIR_OPTIONS[hrirIndex]);
+    }
+
+    /**
+     * Set output order 1-3 (UI control)
+     */
+    setOrder(order: number): void {
+        if (!this.limiter || order < 1 || order > MAX_ORDER) return;
+        this.currentOrder = order;
+        this.limiter.updateOrder(order);
+        this.limiter.out.connect(this.decoder.in);
+        console.log(`Order set to: N${order}`);
+    }
+
+    /**
+     * Set mirror mode (UI control)
+     * 0: none, 1: front-back, 2: left-right, 3: up-down
+     */
+    setMirror(planeNo: number): void {
+        if (!this.mirror || planeNo < 0 || planeNo > 3) return;
+        this.currentMirror = planeNo;
+        this.mirror.mirror(planeNo);
+        console.log(`Mirror set to: ${MIRROR_OPTIONS[planeNo].name}`);
+    }
+
+    /**
+     * Load audio source files
      */
     private async loadAudioAssets(): Promise<void> {
         if (!this.audioContext) {
             throw new Error('AudioContext not initialized');
         }
 
-
         const loadPromises = AUDIO_ASSETS.map(async (asset) => {
             const response = await fetch(asset.path);
             if (!response.ok) {
-                throw new Error(`Failed to load ${asset.path}: ${response.statusText}`);
+                throw new Error(`Failed to load ${asset.path}`);
             }
             const arrayBuffer = await response.arrayBuffer();
             return await this.audioContext!.decodeAudioData(arrayBuffer);
@@ -153,21 +245,15 @@ export class AudioEngine {
 
         this.audioBuffers = await Promise.all(loadPromises);
         this.isLoaded = true;
+        console.log('Audio assets loaded');
     }
 
     /**
-     * Start playback of all stems
+     * Start playback
      */
     play(): void {
-        if (!this.audioContext || !this.isLoaded) {
-            return;
-        }
+        if (!this.audioContext || !this.isLoaded || this.isPlaying) return;
 
-        if (this.isPlaying) {
-            return;
-        }
-
-        // Create new source nodes for each buffer
         this.sourceNodes = this.audioBuffers.map((buffer, index) => {
             const source = this.audioContext!.createBufferSource();
             source.buffer = buffer;
@@ -176,28 +262,22 @@ export class AudioEngine {
             return source;
         });
 
-        // Start all sources at the same time
         const startTime = this.audioContext.currentTime + 0.01;
         this.sourceNodes.forEach((source) => source.start(startTime));
-
         this.isPlaying = true;
     }
 
     /**
-     * Stop playback of all stems
+     * Stop playback
      */
     stop(): void {
-        if (!this.isPlaying) {
-            return;
-        }
+        if (!this.isPlaying) return;
 
         this.sourceNodes.forEach((source) => {
             try {
                 source.stop();
                 source.disconnect();
-            } catch (e) {
-                // Source may already be stopped
-            }
+            } catch (e) { }
         });
 
         this.sourceNodes = [];
@@ -205,12 +285,10 @@ export class AudioEngine {
     }
 
     /**
-     * Set gain for a specific object
+     * Set gain for object
      */
     setGain(objectIndex: number, gain: number): void {
-        if (objectIndex < 0 || objectIndex >= this.gainNodes.length) {
-            return;
-        }
+        if (objectIndex < 0 || objectIndex >= this.gainNodes.length) return;
         const clampedGain = Math.max(0, Math.min(1, gain));
         this.gainNodes[objectIndex].gain.setValueAtTime(
             clampedGain,
@@ -219,12 +297,10 @@ export class AudioEngine {
     }
 
     /**
-     * Set mute state for a specific object
+     * Set mute state
      */
     setMuted(objectIndex: number, muted: boolean): void {
-        if (objectIndex < 0 || objectIndex >= this.gainNodes.length) {
-            return;
-        }
+        if (objectIndex < 0 || objectIndex >= this.gainNodes.length) return;
         this.gainNodes[objectIndex].gain.setValueAtTime(
             muted ? 0 : 1,
             this.audioContext?.currentTime ?? 0
@@ -232,119 +308,51 @@ export class AudioEngine {
     }
 
     /**
-     * Update object position - sends azimuth/elevation to FOA encoder worklet
+     * Update object spatial position
      */
     updateObjectPosition(objectIndex: number, position: ObjectPosition): void {
-        if (objectIndex < 0 || objectIndex >= this.foaEncoders.length) {
-            return;
-        }
+        if (objectIndex < 0 || objectIndex >= this.encoders.length) return;
 
-        const encoder = this.foaEncoders[objectIndex];
+        const encoder = this.encoders[objectIndex];
         if (!encoder) return;
 
-        // Convert degrees to radians for the worklet
-        const azRad = degToRad(position.azimuth);
-        const elRad = degToRad(position.elevation);
-
-        // Set worklet parameters
-        const azParam = encoder.parameters.get('azimuth');
-        const elParam = encoder.parameters.get('elevation');
-
-        if (azParam) {
-            azParam.setValueAtTime(azRad, this.audioContext?.currentTime ?? 0);
-        }
-        if (elParam) {
-            elParam.setValueAtTime(elRad, this.audioContext?.currentTime ?? 0);
-        }
+        // JSAmbisonics uses degrees
+        encoder.azim = position.azimuth;
+        encoder.elev = position.elevation;
+        encoder.updateGains();
     }
 
-    /**
-     * Get current FOA channel levels for metering
-     * Returns array of 4 values [W, Y, Z, X] normalized 0-1
-     */
-    getChannelLevels(): number[] {
-        if (!this.isPlaying || this.channelAnalyzers.length < 4) {
-            return [0, 0, 0, 0];
-        }
-
-        const levels: number[] = [];
-        const dataArray = new Float32Array(128);
-
-        for (let i = 0; i < 4; i++) {
-            const analyzer = this.channelAnalyzers[i];
-            analyzer.getFloatTimeDomainData(dataArray);
-
-            // Calculate RMS level
-            let sum = 0;
-            for (let j = 0; j < dataArray.length; j++) {
-                sum += dataArray[j] * dataArray[j];
-            }
-            const rms = Math.sqrt(sum / dataArray.length);
-
-            // Convert to dB scale for better visual response
-            // RMS values are typically very small (0.001 - 0.1)
-            // Apply logarithmic scaling to make meters more visible
-            const db = rms > 0.0001 ? 20 * Math.log10(rms) : -80;
-
-            // Map dB range (-60 to 0) to 0-1
-            // -60dB = 0, 0dB = 1
-            const normalized = Math.max(0, Math.min(1, (db + 60) / 60));
-
-            levels.push(normalized);
-        }
-
-        return levels;
-    }
+    // Getters for UI
+    get order(): number { return this.currentOrder; }
+    get ready(): boolean { return this.isLoaded && this.filtersLoaded; }
+    get playing(): boolean { return this.isPlaying; }
+    get contextState(): AudioContextState | null { return this.audioContext?.state ?? null; }
 
     /**
-     * Check if audio is ready
-     */
-    get ready(): boolean {
-        return this.isLoaded && this.workletReady;
-    }
-
-    /**
-     * Check if currently playing
-     */
-    get playing(): boolean {
-        return this.isPlaying;
-    }
-
-    /**
-     * Get AudioContext state
-     */
-    get contextState(): AudioContextState | null {
-        return this.audioContext?.state ?? null;
-    }
-
-    /**
-     * Cleanup resources
+     * Cleanup
      */
     dispose(): void {
         this.stop();
         this.gainNodes.forEach((node) => node.disconnect());
         this.gainNodes = [];
-        this.foaEncoders.forEach((node) => node.disconnect());
-        this.foaEncoders = [];
-        this.channelAnalyzers.forEach((node) => node.disconnect());
-        this.channelAnalyzers = [];
-        this.channelSplitter?.disconnect();
-        this.channelSplitter = null;
-        this.binauralDecoder?.disconnect();
-        this.binauralDecoder = null;
-        this.foaBus?.disconnect();
-        this.foaBus = null;
+        this.encoders = [];
+        this.mirror = null;
+        this.limiter = null;
+        this.decoder = null;
+        this.analyser = null;
+        this.ambisonicBus?.disconnect();
+        this.ambisonicBus = null;
         this.masterGain?.disconnect();
         this.masterGain = null;
         this.audioContext?.close();
         this.audioContext = null;
         this.audioBuffers = [];
         this.isLoaded = false;
-        this.workletReady = false;
+        this.filtersLoaded = false;
     }
 }
 
-// Singleton instance
+// Singleton
 let audioEngineInstance: AudioEngine | null = null;
 
 export function getAudioEngine(): AudioEngine {

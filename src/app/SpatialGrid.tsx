@@ -19,6 +19,7 @@ export interface ObjectPosition {
 interface SpatialGridProps {
     positions: ObjectPosition[];
     onPositionChange: (index: number, position: ObjectPosition) => void;
+    disabled?: boolean;
 }
 
 const DOT_RADIUS = 24;
@@ -26,6 +27,7 @@ const DOT_RADIUS = 24;
 export const SpatialGrid: React.FC<SpatialGridProps> = ({
     positions,
     onPositionChange,
+    disabled = false,
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const draggingRef = useRef<number | null>(null);
@@ -105,7 +107,7 @@ export const SpatialGrid: React.FC<SpatialGridProps> = ({
         <div className="spatial-grid-container">
             <div
                 ref={containerRef}
-                className="spatial-grid"
+                className={`spatial-grid ${disabled ? 'disabled' : ''}`}
             >
                 {/* Grid lines */}
                 <div className="grid-lines">
@@ -114,10 +116,10 @@ export const SpatialGrid: React.FC<SpatialGridProps> = ({
                 </div>
 
                 {/* Axis labels */}
-                <div className="axis-label left">-180°</div>
-                <div className="axis-label right">+180°</div>
-                <div className="axis-label top">+45°</div>
-                <div className="axis-label bottom">-45°</div>
+                <div className="axis-label left">+180°</div>
+                <div className="axis-label right">-180°</div>
+                <div className="axis-label top">+90°</div>
+                <div className="axis-label bottom">-90°</div>
                 <div className="axis-label center-label">0°</div>
 
                 {/* Draggable dots */}
