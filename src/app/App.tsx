@@ -41,10 +41,20 @@ const App: React.FC = () => {
             await audioEngine.init();
             setAudioReady(audioEngine.ready);
             setContextState(audioEngine.contextState ?? 'unknown');
+
+            // Sync encoder positions with visual positions
+            positions.forEach((pos, index) => {
+                audioEngine.updateObjectPosition(index, {
+                    x: pos.x,
+                    y: pos.y,
+                    azimuth: xToAzimuth(pos.x),
+                    elevation: yToElevation(pos.y),
+                });
+            });
         } catch (error) {
             console.error('Failed to initialize audio:', error);
         }
-    }, [audioEngine]);
+    }, [audioEngine, positions]);
 
     // Play button handler
     const handlePlay = useCallback(() => {
