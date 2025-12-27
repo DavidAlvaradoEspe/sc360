@@ -56,7 +56,6 @@ export class AudioEngine {
 
     // State
     private currentOrder: number = MAX_ORDER;
-    private currentMirror: number = 0;
     private currentHRIRIndex: number = 2; // Default to Medium room BRIRs
 
     // Mixing
@@ -221,7 +220,6 @@ export class AudioEngine {
      */
     setMirror(planeNo: number): void {
         if (!this.mirror || planeNo < 0 || planeNo > 3) return;
-        this.currentMirror = planeNo;
         this.mirror.mirror(planeNo);
         console.log(`Mirror set to: ${MIRROR_OPTIONS[planeNo].name}`);
     }
